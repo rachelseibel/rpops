@@ -28,6 +28,8 @@ existing spread loop is unchanged when grower behaviour is switched off.
 | `R/behavior_type_assignment.R` | Assign grower types to units under a chosen spatial structure: random, clustered via a Gaussian random field, graded between the two, or empirically constrained from a survey-derived adoption surface. |
 | `R/behavior_helpers.R` | Parse and validate the `behavior:` block of a YAML config, build the per-type parameter list, and compute epidemic-size and outbreak-probability summaries. |
 | `R/learning_dynamics.R` | Between-season updating of willingness-to-treat, and the multi-season driver. |
+| `inst/include/behavior.hpp` | The C++ side of the module: the per-decision-date perception and treatment decision, called from the spread loop. |
+| `tests/testthat/test-behavior.R` | Unit tests for the behaviour configuration and decision rule. |
 
 ## Files modified
 
@@ -37,6 +39,7 @@ existing spread loop is unchanged when grower behaviour is switched off.
 | `R/pops_model.R`, `R/pops_simulate.R`, `R/pops.r` | Route the generated treatment map into the existing treatment process. |
 | `src/pops.cpp`, `src/RcppExports.cpp`, `R/RcppExports.R` | Expose the per-decision-date hooks the R layer needs. |
 | `DESCRIPTION`, `NAMESPACE` | Package metadata and exports (see the note below). |
+| `inst/include/PoPS.h` → `PoPSbehaviour.h` | Renamed with the package; likewise `PoPS_RcppExports.h`. |
 
 Nothing in the upstream spread, dispersal, or treatment machinery is replaced.
 

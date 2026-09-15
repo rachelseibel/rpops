@@ -13,6 +13,7 @@
 #include "uniform_kernel.hpp"
 #include "quarantine.hpp"
 #include "multi_network.hpp"
+#include "behavior.hpp"
 #include <Rcpp.h>
 #include <fstream>
 #include <iostream>
@@ -114,7 +115,8 @@ List pops_model_cpp(
     Nullable<List> network_data_config = R_NilValue,
     int weather_size = 0,
     std::string weather_type = "deterministic",
-    double dispersers_to_soils_percentage = 0)
+    double dispersers_to_soils_percentage = 0,
+    Nullable<List> behavior_config = R_NilValue)
 {
     Config config;
     config.random_seed = random_seed;
@@ -379,8 +381,90 @@ List pops_model_cpp(
       model.activate_soils(soil_reservoirs);
     }
 
+    // --- behavior module setup ---
+    // Constructed only when all four behavior parameters are provided.
+    // Backwards-compatible: when any parameter is R_NilValue the module is disabled
+    // and the simulation runs exactly as before.
+    using BehaviorAction =
+        pops::GrowerDecisionAction<IntegerMatrix, NumericMatrix>;
+    std::unique_ptr<BehaviorAction> behavior_action;
+
+    if (behavior_config.isNotNull()) {
+        List bcfg(behavior_config);
+
+        IntegerMatrix   umap     = as<IntegerMatrix>(bcfg["unit_map"]);
+        IntegerMatrix   tmap     = as<IntegerMatrix>(bcfg["type_map"]);
+        List            gp_list  = as<List>(bcfg["grower_params"]);
+        CharacterVector dec_dates = as<CharacterVector>(bcfg["decision_dates"]);
+        int             pest_dur  = as<int>(bcfg["pesticide_duration"]);
+
+        std::vector<pops::GrowerTypeParams> type_params;
+        for (int tp = 0; tp < gp_list.size(); ++tp) {
+            List p(gp_list[tp]);
+            pops::GrowerTypeParams gtp;
+            gtp.willingness_to_treat  = as<double>(p["willingness_to_treat"]);
+            gtp.decision_threshold    = as<double>(p["decision_threshold"]);
+            gtp.perception_radius     = as<int>(p["perception_radius"]);
+            gtp.detection_probability = as<double>(p["detection_probability"]);
+            gtp.treatment_efficacy    = as<double>(p["treatment_efficacy"]);
+            // Per-type pesticide_duration, falling back to the global value
+            // when a type does not specify one.
+            gtp.pesticide_duration =
+                p.containsElementNamed("pesticide_duration")
+                    ? as<int>(p["pesticide_duration"])
+                    : pest_dur;
+            type_params.push_back(gtp);
+        }
+
+        std::vector<std::string> date_strings;
+        for (int d = 0; d < dec_dates.size(); ++d)
+            date_strings.push_back(as<std::string>(dec_dates[d]));
+
+        unsigned behavior_seed = static_cast<unsigned>(random_seed) + 31337u;
+
+        // Optional perception mode: "unit" uses a host-only denominator over
+        // the grower's own management-unit cells; anything else (default)
+        // uses the circular perception-window denominator.
+        pops::PrevalenceMode prevalence_mode = pops::PrevalenceMode::Window;
+        if (bcfg.containsElementNamed("perception_mode")) {
+            std::string pm = as<std::string>(bcfg["perception_mode"]);
+            if (pm == "unit") prevalence_mode = pops::PrevalenceMode::Unit;
+        }
+
+        behavior_action.reset(new BehaviorAction(
+            umap, tmap, type_params,
+            date_strings, config.scheduler(),
+            config.rows, config.cols,
+            pest_dur,
+            behavior_seed,
+            prevalence_mode));
+
+        config.use_treatments = true;
+    }
+    // --- end behavior module setup ---
+
     for (unsigned current_index = 0; current_index < config.scheduler().get_num_steps();
          ++current_index) {
+
+      // Behavior decisions fire BEFORE model.run_step so the injected treatment
+      // is applied within the same step via Treatments::manage().
+      if (behavior_action && behavior_action->should_act(current_index)) {
+          // Grower decisions, bucketed by each type's pesticide_duration.
+          // Each distinct duration is injected as its own scheduled treatment.
+          std::map<int, NumericMatrix> beh_maps =
+              behavior_action->fill_treatment_maps(
+                  input_host_pool.infected[0],
+                  input_host_pool.total_hosts[0]);
+          pops::Date decision_date =
+              behavior_action->date_for_step(current_index);
+          for (auto& dm : beh_maps) {
+              treatments.add_treatment(
+                  dm.second,
+                  decision_date,
+                  dm.first,
+                  treatment_application);
+          }
+      }
 
       auto weather_step = config.simulation_step_to_weather_step(current_index);
       if (weather_typed == WeatherType::Probabilistic) {

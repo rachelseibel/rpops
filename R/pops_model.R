@@ -12,7 +12,8 @@
 #'
 
 pops_model <-
-  function(config) {
+  function(config,
+           behavior_config = NULL) {
 
     # List of overpopulation parameters of type double
     overpopulation_config <- c()
@@ -122,7 +123,8 @@ pops_model <-
                      network_data_config = network_data_config,
                      weather_size = config$weather_size,
                      weather_type = config$weather_type,
-                     dispersers_to_soils_percentage = config$dispersers_to_soils_percentage
+                     dispersers_to_soils_percentage = config$dispersers_to_soils_percentage,
+                     behavior_config = behavior_config
     ))
 
     return(data)

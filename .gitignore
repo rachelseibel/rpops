@@ -8,3 +8,12 @@ docs
 inst/doc
 *env
 *.rds
+
+# Build artefacts and editor/OS cruft (added on the grower-behaviour branch)
+*.o
+*.so
+*.dll
+.Rhistory
+.RData
+.Rproj.user
+.DS_Store

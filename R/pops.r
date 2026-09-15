@@ -10,7 +10,7 @@
 #' @param config Path to config file produced when calling `configuration`.
 #' The config file includes all data necessary used to set up c++ PoPS model
 #'
-#' @useDynLib PoPS, .registration = TRUE
+#' @useDynLib PoPSbehaviour, .registration = TRUE
 #' @importFrom terra app rast xres yres classify extract ext as.points ncol nrow project
 #' nlyr rowFromCell colFromCell values as.matrix rowFromCell colFromCell crs
 #' @importFrom Rcpp sourceCpp evalCpp
@@ -40,7 +40,8 @@ pops <- function(config) {
   config$random_seed <- config$random_seed_list[[1]]
   config$random_seeds <- as.matrix(config$random_seeds_list[1, ])[1, ]
 
-  data <- PoPS::pops_model(config)
+  data <- PoPSbehaviour::pops_model(config,
+                           behavior_config = config$cpp_behavior_config)
 
   return(data)
 }

@@ -23,7 +23,7 @@ configuration <- function(config_file, testing = FALSE) {
   config <- yaml::yaml.load_file(config_file)
   config$testing <- testing
   if (config$testing) {
-    inpath <- system.file("extdata", config$host_files[[1]], package = "PoPS")
+    inpath <- system.file("extdata", config$host_files[[1]], package = "PoPSbehaviour")
     inpath2 <- gsub(paste0("/", config$host_files[[1]]), "", inpath)
     added_path <- gsub(config$input_path, "", config$output_path)
     outpath <- file.path(inpath2, added_path)
@@ -1103,6 +1103,115 @@ configuration <- function(config_file, testing = FALSE) {
   bounding_box$west <- config$xmin
   bounding_box$east <- config$xmax
   config$bounding_box <- bounding_box
+
+  # ---------------------------------------------------------------------------
+  # Behavior module
+  # ---------------------------------------------------------------------------
+  # Preprocessed once here; stored in config$cpp_behavior_config so that
+  # pops_simulate() and pops() can pass it straight through to pops_model()
+  # without any per-iteration overhead.
+  config$use_behavior     <- isTRUE(config$use_behavior)
+  config$cpp_behavior_config <- NULL
+
+  if (config$use_behavior) {
+    bcfg <- config$behavior
+    if (is.null(bcfg)) {
+      config$failure <- paste("use_behavior is true but no 'behavior:' block",
+                              "found in the config file.")
+      print(config$failure)
+      return(config)
+    }
+
+    check <- validate_behavior_config(bcfg,
+                                      start_date = config$start_date,
+                                      end_date   = config$end_date,
+                                      time_step  = config$time_step)
+    if (!check$checks_passed) {
+      config$failure <- check$failed_check
+      print(config$failure)
+      return(config)
+    }
+
+    # -- Management unit delineation ------------------------------------------
+    if (!is.null(bcfg$unit_map_file) && nchar(bcfg$unit_map_file) > 0) {
+      unit_raster <- terra::rast(file.path(config$input_path, bcfg$unit_map_file))
+    } else {
+      method        <- if (!is.null(bcfg$unit_delineation)) bcfg$unit_delineation
+                       else "patch"
+      polygon_layer <- NULL
+      if (method == "polygon" && !is.null(bcfg$polygon_file) &&
+          nchar(bcfg$polygon_file) > 0) {
+        polygon_layer <- terra::vect(file.path(config$input_path, bcfg$polygon_file))
+      }
+      unit_raster <- delineate_management_units(
+        config$host,
+        method        = method,
+        polygon_layer = polygon_layer,
+        grid_size     = bcfg$grid_size
+      )
+    }
+
+    # -- Type assignment -------------------------------------------------------
+    tp <- bcfg$type_probs
+    type_probs_vec <- c(early_adopter = tp$early_adopter,
+                        responsive    = tp$responsive,
+                        non_adopter   = tp$non_adopter)
+
+    empirical_raster <- NULL
+    if (!is.null(bcfg$empirical_raster_file) &&
+        nchar(bcfg$empirical_raster_file) > 0) {
+      empirical_raster <- terra::rast(
+        file.path(config$input_path, bcfg$empirical_raster_file))
+    }
+
+    type_raster <- assign_grower_types(
+      unit_raster,
+      type_probs        = type_probs_vec,
+      spatial_structure = if (!is.null(bcfg$spatial_structure))
+                            bcfg$spatial_structure else "random",
+      cluster_range     = bcfg$cluster_range,
+      cluster_strength  = if (!is.null(bcfg$cluster_strength))
+                            bcfg$cluster_strength else 1,
+      empirical_raster  = empirical_raster,
+      random_seed       = bcfg$random_seed,
+      unit_aggregation  = if (!is.null(bcfg$unit_aggregation))
+                            bcfg$unit_aggregation else "field_rank"
+    )
+
+    # -- Grower parameter list for C++ ----------------------------------------
+    # treatment_efficacy and pesticide_duration may be set per grower type;
+    # when a type omits them they fall back to the global behavior-block values.
+    gp       <- bcfg$grower_params
+    efficacy <- bcfg$treatment_efficacy
+    duration <- bcfg$pesticide_duration
+
+    one_type <- function(g) {
+      list(willingness_to_treat  = g$willingness_to_treat,
+           decision_threshold    = g$decision_threshold,
+           perception_radius     = as.integer(g$perception_radius),
+           detection_probability = g$detection_probability,
+           treatment_efficacy    = g$treatment_efficacy %||% efficacy,
+           pesticide_duration    = as.integer(g$pesticide_duration %||% duration))
+    }
+
+    grower_params_cpp <- list(
+      one_type(gp$early_adopter),
+      one_type(gp$responsive),
+      one_type(gp$non_adopter)
+    )
+
+    config$cpp_behavior_config <- list(
+      unit_map           = terra::as.matrix(unit_raster, wide = TRUE),
+      type_map           = terra::as.matrix(type_raster, wide = TRUE),
+      grower_params      = grower_params_cpp,
+      decision_dates     = as.character(bcfg$decision_dates),
+      pesticide_duration = as.integer(bcfg$pesticide_duration),
+      # "window" (default) or "unit" host-only denominator
+      perception_mode    = bcfg$perception_mode %||% "window"
+    )
+  }
+  # ---------------------------------------------------------------------------
+
   gc()
   return(config)
 }

@@ -77,7 +77,7 @@ pops_simulate <- function(config_rds_file) {
 
   foreach::foreach(
     i = seq_len(config$number_of_iterations),
-    .packages = c("PoPS", "terra")
+    .packages = c("PoPSbehaviour", "terra")
   ) %dopar% {
 
     set.seed(config$random_seed_list[[i]])
@@ -93,7 +93,8 @@ pops_simulate <- function(config_rds_file) {
     config$random_seed <- config$random_seed_list[[i]]
     config$random_seeds <- as.matrix(config$random_seeds_list[i, ])[1, ]
 
-    data <- PoPS::pops_model(config)
+    data <- PoPSbehaviour::pops_model(config,
+                             behavior_config = config$cpp_behavior_config)
 
     data[c("spatial_indices",
            "soil_reservoirs",
